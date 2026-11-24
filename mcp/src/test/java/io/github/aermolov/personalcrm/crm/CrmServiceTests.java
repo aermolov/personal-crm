@@ -6,15 +6,17 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import io.github.aermolov.personalcrm.crm.api.Contact;
 import io.github.aermolov.personalcrm.crm.api.ContactNotFoundException;
 import io.github.aermolov.personalcrm.crm.api.ContactService;
+import io.github.aermolov.personalcrm.crm.api.Interaction;
 import io.github.aermolov.personalcrm.crm.api.InteractionService;
 import io.github.aermolov.personalcrm.crm.api.InvalidInputException;
+import io.github.aermolov.personalcrm.crm.persistence.ContactJpaRepository;
+import io.github.aermolov.personalcrm.crm.persistence.InteractionJpaRepository;
 import java.time.OffsetDateTime;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.jdbc.core.JdbcTemplate;
 
 @SpringBootTest
 class CrmServiceTests {
@@ -30,12 +32,15 @@ class CrmServiceTests {
 	private InteractionService interactionService;
 
 	@Autowired
-	private JdbcTemplate jdbcTemplate;
+	private ContactJpaRepository contactJpaRepository;
+
+	@Autowired
+	private InteractionJpaRepository interactionJpaRepository;
 
 	@BeforeEach
 	void clearData() {
-		jdbcTemplate.update("DELETE FROM interactions");
-		jdbcTemplate.update("DELETE FROM contacts");
+		interactionJpaRepository.deleteAllInBatch();
+		contactJpaRepository.deleteAllInBatch();
 	}
 
 	@Test
@@ -58,6 +63,17 @@ class CrmServiceTests {
 	}
 
 	@Test
+	void allLikeMetacharactersInSearchAreLiteral() {
+		Contact underscoreContact = contactService.create(SUB_A, "100_ Match", null, null);
+		contactService.create(SUB_A, "100x Match", null, null);
+		Contact backslashContact = contactService.create(SUB_A, "C:\\Temp", null, null);
+		contactService.create(SUB_A, "C:Temp", null, null);
+
+		assertEquals(List.of(underscoreContact), contactService.search(SUB_A, "_"));
+		assertEquals(List.of(backslashContact), contactService.search(SUB_A, "\\"));
+	}
+
+	@Test
 	void validationErrorsDoNotWrite() {
 		assertEquals(0, contactService.list(SUB_A).size());
 
@@ -67,6 +83,35 @@ class CrmServiceTests {
 				() -> contactService.create(SUB_A, "Name", "not-an-email", null));
 
 		assertEquals(0, contactService.list(SUB_A).size());
+	}
+
+	@Test
+	void interactionValidationDoesNotWrite() {
+		Contact contact = contactService.create(SUB_A, "Contact", null, null);
+
+		assertThrows(InvalidInputException.class,
+				() -> interactionService.log(SUB_A, contact.id(), null, "Summary"));
+		assertThrows(InvalidInputException.class,
+				() -> interactionService.log(SUB_A, contact.id(), OCCURRED_AT, " "));
+
+		assertEquals(List.of(), interactionService.list(SUB_A, contact.id()));
+	}
+
+	@Test
+	void interactionsAreOrderedByOccurredAtAndId() {
+		Contact contact = contactService.create(SUB_A, "Contact", null, null);
+		Interaction later = interactionService.log(
+				SUB_A,
+				contact.id(),
+				OCCURRED_AT.plusDays(1),
+				"Later");
+		Interaction earlier = interactionService.log(
+				SUB_A,
+				contact.id(),
+				OCCURRED_AT,
+				"Earlier");
+
+		assertEquals(List.of(earlier, later), interactionService.list(SUB_A, contact.id()));
 	}
 
 	@Test
